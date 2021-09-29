@@ -1129,6 +1129,9 @@ After a short time the certificate should be applied. This can be tested by call
 `https://api.okd.my-okd.mylab.net:6443` in a browser. Or when the CA is imported in the OS truststore
 we can call `oc whoami` from our workstation (when logged in) and see if there is a certificate error.
 
+When the certificate is not recognized one have to log in with a login command from the okd console
+(placed under the user menu -> copy login command) and allow the unrecognized certificate with oc login.
+
 #### Creating the certificate for the apps domain
 
 The creation of this certificate is pretty much the same as for the api. But in this case we assign a
