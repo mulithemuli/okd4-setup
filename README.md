@@ -49,7 +49,7 @@ Two notes:
 - Maybe the security settings on the router regarding MAC address permissions are relevant. Since the
 virtual machines will be bridged to the home network it might be necessary to grant them actual 
 access to the network.
-- The network setup might not work with a WiFi connection - in this tutorial we are using the cable
+- The network setup might not work with a Wi-Fi connection - in this tutorial we are using the cable
 connection.
 
 ## Setup
@@ -162,7 +162,7 @@ firewall-cmd --permanent --add-service=dns
 firewall-cmd --reload
 ```
 
-Next we create a SSH key pair. This is required to communicate between the OKD nodes and the host later on.
+Next we create an SSH key pair. This is required to communicate between the OKD nodes and the host later on.
 As we can see we are working as root now.
 
 ```
@@ -685,7 +685,7 @@ curl -o install-dir/syslinux-6.03.tar.xz https://mirrors.edge.kernel.org/pub/lin
 tar -xf install-dir/syslinux-6.03.tar.xz -C install-dir/
 ```
 
-Prepare the install images
+Prepare the installation images
 
 ```
 mkdir -p install-dir/fcos-iso/{isolinux,images}
@@ -737,9 +737,9 @@ virt-install --name okd4-bootstrap --memory 14336 --vcpus 2 --disk size=100,path
 ```
 
 After that the bootstrap node starts up, downloads the image and begins installation. When the installation
-is completed the VM shuts down and we can go on configuring the control plane(s).
+is completed the VM shuts down, and we can go on configuring the control plane(s).
 
-### Control plames (`okd4-control-plane-[1-3]`)
+### Control planes (`okd4-control-plane-[1-3]`)
 
 Create the ISO image here as well by reusing the `install-dir/fcos-iso/isolinux/isolinux.cfg` configuration
 
@@ -1178,7 +1178,7 @@ cat api.okd.my-okd.mylab.net.crt intermediate/ca-int.crt ca/ca.crt > api.okd.my-
 The description to apply the certificate for our ingress routes comes from
 [https://docs.okd.io/latest/security/certificates/replacing-default-ingress-certificate.html](https://docs.okd.io/latest/security/certificates/replacing-default-ingress-certificate.html).
 
-First we add the root CA used to sign our certificates as an config map entry:
+First we add the root CA used to sign our certificates as a config map entry:
 
 ```
 oc create configmap custom-ca \
