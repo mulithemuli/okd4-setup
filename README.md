@@ -865,8 +865,349 @@ As for now it should be possible to log in to the cluster via
 `https://console-openshift-console.apps.okd.my-okd.mylab.home.net/` using the username `kubeadmin` with
 the password provided in `/root/install-dir/auth/kubeadmin-password`.
 
+### Login via oc command line
+
+To perform actions via the `oc` command the `KUBEADMIN` variable needs to be exported:
+
+```
+export KUBECONFIG="/root/install-dir/auth/kubeconfig"
+```
+
+When using this you are logged in as kubeadmin.
+
 ## Next steps
 
 ### Creating Persistent Volume Claims (PVC)
 
+First we have to set up the nfs service on our okd4-services machine. Probably `nfs-utils` is already
+installed.
+
+```
+dnf install -y nfs-utils
+systemctl enable nfs-server rpcbind
+systemctl start nfs-server rpcbind
+mkdir -p /var/nfsshare/registry
+chmod -R 777 /var/nfsshare
+chown -R nobody:nobody /var/nfsshare
+```
+
+Export the created directory via nfs share
+
+```
+echo '/var/nfsshare 192.168.10.0/24(rw,sync,no_root_squash,no_all_squash,no_wdelay)' | sudo tee /etc/exports
+```
+
+Then the service needs to be restarted and firewall rules have to be added:
+
+```
+sudo setsebool -P nfs_export_all_rw 1
+sudo systemctl restart nfs-server
+sudo firewall-cmd --permanent --zone=public --add-service mountd
+sudo firewall-cmd --permanent --zone=public --add-service rpc-bind
+sudo firewall-cmd --permanent --zone=public --add-service nfs
+sudo firewall-cmd --reload
+```
+
+When this is completed we have to add the persistent volume to the OKD configuration. Therefore, a file
+`/root/install-dir/work-dir/registry_pv.yaml` is needed.
+
+```
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: registry-pv
+spec:
+  capacity:
+    storage: 100Gi
+  accessModes:
+    - ReadWriteMany
+  persistentVolumeReclaimPolicy: Retain
+  nfs:
+    path: /var/nfsshare/registry
+    server: 192.168.10.100
+```
+
+Apply it with
+
+```
+oc create -f /root/install-dir/work-dir/registry_pv.yaml
+```
+
+When listing the persistent volumes with `oc get pv` it shows something like this:
+
+```
+> oc get pv
+NAME          CAPACITY   ACCESS MODES   RECLAIM POLICY   STATUS      CLAIM   STORAGECLASS   REASON   AGE
+registry-pv   100Gi      RWX            Retain           Available                                   4s
+```
+
+Now we have to modify the image-registry operator:
+
+```
+oc edit configs.imageregistry.operator.openshift.io
+```
+
+Edit the `spec` section and change the value of `managementState` from `Never` to `Managed` and add empty
+entries to the `storage` section here:
+
+```
+spec:
+# ...
+  managementState: Managed
+# ...
+  storage:
+    pvc:
+      claim:
+# ...
+```
+
+After saving the configuration we can run `oc get pv` again and should see this result:
+
+```
+> oc get pv
+NAME          CAPACITY   ACCESS MODES   RECLAIM POLICY   STATUS   CLAIM                                             STORAGECLASS   REASON   AGE
+registry-pv   100Gi      RWX            Retain           Bound    openshift-image-registry/image-registry-storage                           4m28s
+```
+
+### Adding custom users
+
+Here we are using a htpasswd "identity provider". We are going to just create a htpasswd file and add users
+to it for simplicity. Of course, it is possible to use other identity providers.
+
+```
+htpasswd -cB /root/install-dir/work-dir/htpasswd admin
+htpasswd -b /root/install-dir/work-dir/htpasswd devuser
+```
+
+We then create the secret in OKD via the command line:
+
+```
+oc create -n openshift-config secret generic htpasswd-secret --from-file=htpasswd=/root/install-dir/work-dir/htpasswd
+```
+
+Then we apply the according configuration to use this secret as identity provider. Therefore, we create
+the yaml file `/root/install-dir/work-dir/htpasswd-cr.yaml`:
+
+```
+apiVersion: config.openshift.io/v1
+kind: OAuth
+metadata:
+  name: cluster
+spec:
+  identityProviders:
+  - name: okd4_htpasswd_idp
+    mappingMethod: claim 
+    type: HTPasswd
+    htpasswd:
+      fileData:
+        name: htpasswd-secret
+```
+
+```
+oc apply -f /root/install-dir/work-dir/htpasswd-cr.yaml
+```
+
+Finally, we are going to make the admin user a cluster admin:
+
+```
+oc adm policy add-cluster-role-to-user cluster-admin admin
+```
+
+When this is done we can log in to the console choosing the okd4_htpasswd_idp and using the credentials
+of one of the two created users.
+
 ### Providing custom certificates
+
+We have created an `host.ext` file to create x509v3 certificates which is referenced in the scripts below.
+
+```
+extensions = x509v3
+
+ [ x509v3 ]
+nsCertType              = server
+keyUsage                = digitalSignature,nonRepudiation,keyEncipherment
+extendedKeyUsage        = serverAuth
+```
+
+Default settings are stored in `host.conf`:
+
+```
+ [ req ]
+default_bits               = 4096
+distinguished_name         = req_DN
+string_mask                = nombstr
+
+ [req_DN ]
+countryName                = "1. Country Name      (2 letter code)"
+countryName_default        = AT
+countryName_min            = 2
+countryName_max            = 2
+stateOrProvinceName        = "2. State or Province Name (full Name)"
+stateOrProvinceName_default = Vienna
+localityName               = "3. Locality Name (eg. City)"
+localityName_default       = Vienna
+0.organizationName         = "4. Organization Name (eg. Company)"
+0.organizationName_default = My Lab
+organizationalUnitName     = "5. Organizational Unit Name (eg. section)"
+organizationalUnitName_default  = OKD services
+commonName                 = "6. Common Name (eg. CA Name)"
+commonName_max             = 64
+commonName_default         = HOST.net
+emailAddress               = "7. Email Address (eg. name@FQDN)"
+emailAddress_max           = 40
+emailAddress_default       = admin@HOST.net
+```
+
+Later on it is important for the certificate to set the common name to the domain.
+
+When creating the certificates later on we can see that we are using a custom CA and an intermediate CA
+to sign the certificate. We can create those certificates in advance. This has the advantage that we can
+import our own CA in the OS truststore and trust all our self-signed certificates.
+
+#### Creating the certificate for the api
+
+As the [OKD docs](https://docs.okd.io/latest/security/certificates/api-server.html) mention, never ever
+create a certificate for the api-int domain!
+
+This certificate can be created directly for the domain. No wildcard alias is needed. To allow OKD to
+read the key we assign no password.
+
+```
+openssl req \
+        -new \
+        -nodes \
+        -reqexts SAN \
+        -extensions SAN \
+        -config <(cat host.conf <(printf "\n[SAN]\nsubjectAltName=DNS:api.okd.my-okd.mylab.net\n")) \
+        -out api.okd.my-okd.mylab.net.csr \
+        -keyout api.okd.my-okd.mylab.net.key \
+        -newkey rsa:4096 \
+        -sha512
+```
+
+This creates the private key and a certificate request. We are going to sign the certificate request:
+
+```
+openssl x509 -req \
+        -extfile <(cat host.ext <(printf "\nsubjectAltName=DNS:api.okd.my-okd.mylab.net\n")) \
+        -in api.okd.my-okd.mylab.net.csr \
+        -CAkey intermediate/ca-int.key \
+        -CA intermediate/ca-int.crt \
+        -days 825 \
+        -sha512 \
+        -set_serial $RANDOM \
+        -out api.okd.my-okd.mylab.net.crt
+```
+
+And finally we create one file with the certificate chain containing our root CA, intermediate CA and the
+certificate for the domain itself.
+
+```
+cat api.okd.my-okd.mylab.net.crt intermediate/ca-int.crt ca/ca.crt > api.okd.my-okd.mylab.net.chained.crt
+```
+
+With those certificates we create a secret in our OKD cluster:
+
+```
+oc create secret tls ssl-api-cert \
+     --cert=api.okd.my-okd.mylab.net.chained.crt \
+     --key=api.okd.my-okd.mylab.net.key \
+     -n openshift-config
+```
+
+Then we have to patch the configuration of our api server:
+
+```
+oc patch apiserver cluster \
+     --type=merge -p \
+     '{"spec":{"servingCerts": {"namedCertificates":
+     [{"names": ["api.okd.my-okd.mylab.net"], 
+     "servingCertificate": {"name": "ssl-api-cert"}}]}}}'
+```
+
+After a short time the certificate should be applied. This can be tested by calling
+`https://api.okd.my-okd.mylab.net:6443` in a browser. Or when the CA is imported in the OS truststore
+we can call `oc whoami` from our workstation (when logged in) and see if there is a certificate error.
+
+#### Creating the certificate for the apps domain
+
+The creation of this certificate is pretty much the same as for the api. But in this case we assign a
+wildcard domain as DNS alternative name to allow all subdomains under `apps.okd.my-okd.mylab.net` to use
+the same certificate. We do this here for simplicity.
+
+Mind the asterisk in the following commands when assigning the DNS alternative name.
+
+Request:
+
+```
+openssl req \
+        -new \
+        -nodes \
+        -reqexts SAN \
+        -extensions SAN \
+        -config <(cat host.conf <(printf "\n[SAN]\nsubjectAltName=DNS:*.apps.okd.my-okd.mylab.net\n")) \
+        -out apps.okd.my-okd.mylab.net.csr \
+        -keyout apps.okd.my-okd.mylab.net.key \
+        -newkey rsa:4096 \
+        -sha512
+```
+
+Sign:
+
+```
+openssl x509 -req \
+        -extfile <(cat host.ext <(printf "\nsubjectAltName=DNS:*.apps.okd.my-okd.mylab.net\n")) \
+        -in apps.okd.my-okd.mylab.net.csr \
+        -CAkey intermediate/ca-int.key \
+        -CA intermediate/ca-int.crt \
+        -days 825 \
+        -sha512 \
+        -set_serial $RANDOM \
+        -out apps.okd.my-okd.mylab.net.crt
+```
+
+Chain:
+
+```
+cat api.okd.my-okd.mylab.net.crt intermediate/ca-int.crt ca/ca.crt > api.okd.my-okd.mylab.net.chained.crt
+```
+
+The description to apply the certificate for our ingress routes comes from
+[https://docs.okd.io/latest/security/certificates/replacing-default-ingress-certificate.html](https://docs.okd.io/latest/security/certificates/replacing-default-ingress-certificate.html).
+
+First we add the root CA used to sign our certificates as an config map entry:
+
+```
+oc create configmap custom-ca \
+     --from-file=ca-bundle.crt=ca/ca.crt \
+     -n openshift-config
+```
+
+Then patch the proxy/cluster configuration:
+
+```
+oc patch proxy/cluster \
+     --type=merge \
+     --patch='{"spec":{"trustedCA":{"name":"custom-ca"}}}'
+```
+
+Create the secret for the ingress namespace:
+
+```
+oc create secret tls ssl-ingress-cert \
+     --cert=apps.okd.my-okd.mylab.net.cained.crt \
+     --key=apps.okd.my-okd.mylab.net.key \
+     -n openshift-ingress
+```
+
+And finally patch the ingress controller:
+
+```
+oc patch ingresscontroller.operator default \
+     --type=merge -p \
+     '{"spec":{"defaultCertificate": {"name": "ssl-ingress-cert"}}}' \
+     -n openshift-ingress-operator
+```
+
+After this command has been issued it could be possible that the cluster is not reachable for some time.
+But when all operators and the control planes are back up and synced the cluster will be fine again.
