@@ -708,7 +708,7 @@ cp install-dir/syslinux-6.03/bios/com32/libutil/libutil.c32 install-dir/fcos-iso
 
 Create the ISO image for the bootstrap node
 
-`install-dir/fcos-iso/isolinux/bootstrap.cfg`
+`install-dir/fcos-iso/isolinux/isolinux.cfg`
 
 ```
 serial 0
@@ -755,7 +755,7 @@ label linux
   menu label ^Fedora CoreOS (Live)
   menu default
   kernel /images/vmlinuz
-  append initrd=/images/initramfs.img,/images/rootfs.img net.ifnames=1 ifname=nic0:52:54:00:71:28:7c ip=192.168.10.101::192.168.10.1:255.255.255.0:okd4-control-plane-1.my-okd.mylab.home.net:nic0:none nameserver=192.168.10.100 rd.neednet=1 coreos.inst=yes coreos.inst.install_dev=/dev/sda coreos.inst.ignition_url=http://192.168.10.100/install/fcos/ignition/master.ign coreos.inst.platform_id=qemu console=ttyS0
+  append initrd=/images/initramfs.img,/images/rootfs.img net.ifnames=1 ifname=nic0:ab:cd:ef:11:22:10 ip=192.168.10.101::192.168.10.1:255.255.255.0:okd4-control-plane-1.my-okd.mylab.home.net:nic0:none nameserver=192.168.10.100 rd.neednet=1 coreos.inst=yes coreos.inst.install_dev=/dev/sda coreos.inst.ignition_url=http://192.168.10.100/install/fcos/ignition/master.ign coreos.inst.platform_id=qemu console=ttyS0
 menu separator
 menu end
 ```
@@ -768,7 +768,7 @@ And create the VM
 
 ```
 mkdir -p /VirtualMachines/okd4-control-plane-1
-virt-install --name okd4-control-plane-1 --memory 16384 --vcpus 4 --disk size=200,path=/VirtualMachines/okd4-control-plane-1/rootvol,bus=sata --cdrom /tmp/control-plane-1.iso --network bridge=br0 --mac=52:54:00:71:28:7c --graphics none --noautoconsole --os-variant centos7.0
+virt-install --name okd4-control-plane-1 --memory 16384 --vcpus 4 --disk size=200,path=/VirtualMachines/okd4-control-plane-1/rootvol,bus=sata --cdrom /tmp/control-plane-1.iso --network bridge=br0 --mac=ab:cd:ef:11:22:10 --graphics none --noautoconsole --os-variant centos7.0
 ```
 
 We have to repeat this for all our three control plane nodes.
@@ -1214,3 +1214,6 @@ oc patch ingresscontroller.operator default \
 
 After this command has been issued it could be possible that the cluster is not reachable for some time.
 But when all operators and the control planes are back up and synced the cluster will be fine again.
+
+## Adding worker nodes
+
