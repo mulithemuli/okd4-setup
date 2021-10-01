@@ -1217,3 +1217,265 @@ But when all operators and the control planes are back up and synced the cluster
 
 ## Adding worker nodes
 
+The worker nodes will be created on a separate machine since the SoC already uses 48 GiB of memory for the
+master nodes. Here we are using an old Lenovo ThinkPad t540p with 16 GiB of memory. Since we have to create
+two worker nodes each one gets 8 GiB of memory. This is not actually a production setup but comes close to
+it. There are three things we would have to change for the minimum production requirements:
+- Each worker node should have at least 16 GiB of memory
+- The host machine for the workers should have some spare memory
+- The master nodes created previously are currently configured as master and worker nodes. The worker role
+should be taken away for a production setup
+
+But since this a lab we are fine with those limitations.
+
+The hostname of the host machine is not really relevant, but we are using `okd4-workers-1.my-okd.mylab.home.net`
+for completeness.
+
+To create the worker nodes the setup is pretty much the same as above:
+
+We are using CentOS 8 for the host system and setting up KVM to create two virtual machines:
+- `okd4-compute-1`
+- `okd4-compute-2`
+
+We install not all the packages as for our `okd4-services` machine. There is no need for `nginx` or `bind`.
+
+```
+dnf -y module install virt
+dnf -y install wget git net-tools bash-completion rsync libguestfs-tools virt-install epel-release libvirt-devel httpd-tools
+```
+
+The virtual machines are initialized as before
+
+```
+systemctl enable libvirtd --now
+
+mkdir /VirtualMachines
+virsh pool-destroy default
+virsh pool-undefine default
+virsh pool-define-as --name default --type dir --target /VirtualMachines
+virsh pool-autostart default
+virsh pool-start default
+```
+
+The network setup of this machine is the same as above. But keep in mind assigning a different IP address.
+
+The primary network interface on this machine is `enp0s25`. Replace it with the correct one on your machine.
+
+```
+nmcli connection add type bridge ifname br0 con-name br0 ipv4.method manual ipv4.address "192.168.10.99/24" ipv4.gateway "192.168.10.1" ipv4.dns "192.168.10.100" ipv4.dns-search "my-okd.mylab.home.net" ipv4.never-default no connection.autoconnect yes bridge.stp no ipv6.method ignore 
+nmcli con add type ethernet con-name br0-bind-1 ifname enp0s25 master br0
+nmcli con del enp0s25
+nmcli con add type ethernet con-name enp0s25 ifname enp0s25 connection.autoconnect no ipv4.method disabled ipv6.method ignore
+```
+
+Add the DNS entries for the new virtual machines in the DNS tables on our `okd4-services` machine.
+
+`/etc/named/zones/db.my-okd_ptr`
+
+```
+## entries already existing in our db.my-okd_ptr:
+@       IN      SOA     okd4-services.my-okd.mylab.home.net. admin.my-okd.mylab.home.net. (
+                              3         ; Serial
+                         604800         ; Refresh
+                          86400         ; Retry
+                        2419200         ; Expire
+                         604800 )       ; Negative Cache TTL
+
+; name servers - NS records
+      IN      NS      okd4-services.my-okd.mylab.home.net.
+
+; PTR Records
+100     IN      PTR     okd4-services.my-okd.mylab.home.net.
+110     IN      PTR     okd4-bootstrap.my-okd.mylab.home.net.
+101     IN      PTR     okd4-control-plane-1.my-okd.mylab.home.net.
+102     IN      PTR     okd4-control-plane-2.my-okd.mylab.home.net.
+103     IN      PTR     okd4-control-plane-3.my-okd.mylab.home.net.
+
+## new entries for the workers:
+99      IN      PTR     okd4-workers-1.my-okd.mylab.home.net.
+104     IN      PTR     okd4-compute-1.my-okd.mylab.home.net.
+105     IN      PTR     okd4-compute-2.my-okd.mylab.home.net.
+```
+
+`/etc/named/zones/db.my-okd.mylab.home.net`.
+
+```
+## entries already existing in our db.my-okd.mylab.home.net:
+@	IN	SOA     okd4-services.my-okd.mylab.home.net. admin.my-okd.mylab.home.net. (
+             3          ; Serial
+             604800     ; Refresh
+              86400     ; Retry
+            2419200     ; Expire
+             604800 )   ; Negative Cache TTL
+;
+; name servers - NS records
+    IN      NS     okd4-services.my-okd.mylab.home.net.
+
+; name servers - A records
+okd4-services.my-okd.mylab.home.net.         IN      A      192.168.10.100
+
+## new entry for our workers host:
+okd4-workers-1.my-okd.mylab.home.net.        IN      A      192.168.10.99
+
+; Cluster A records
+okd4-bootstrap.my-okd.mylab.home.net.  IN      A      192.168.10.110
+okd4-control-plane-1.my-okd.mylab.home.net.     IN	A      192.168.10.101
+okd4-control-plane-2.my-okd.mylab.home.net.     IN	A      192.168.10.102
+okd4-control-plane-3.my-okd.mylab.home.net.     IN	A      192.168.10.103
+
+## new entries for the workers:
+okd4-compute-1.my-okd.mylab.home.net.   IN  A   192.168.10.104
+okd4-compute-2.my-okd.mylab.home.net.   IN  A   192.168.10.105
+
+## already existing entries. we do not need additions here
+; Internal cluster IPs
+etcd-0.okd.my-okd.mylab.home.net.              IN	   A	  192.168.10.101
+etcd-1.okd.my-okd.mylab.home.net.              IN	   A	  192.168.10.102
+etcd-2.okd.my-okd.mylab.home.net.              IN	   A	  192.168.10.103
+*.apps.okd.my-okd.mylab.home.net.     IN	  A	 192.168.10.100
+api.okd.my-okd.mylab.home.net.        IN	  A	 192.168.10.100
+api-int.okd.my-okd.mylab.home.net.    IN	  A	 192.168.10.100
+console-openshift-console.apps.okd.my-okd.mylab.home.net.   IN	A	192.168.10.100
+oauth-openshift.apps.okd.my-okd.mylab.home.net.     IN	A	192.168.10.100
+
+_etcd-server-ssl._tcp.okd.my-okd.mylab.home.net.    86400     IN    SRV     0    10    2380    etcd-0.okd
+_etcd-server-ssl._tcp.okd.my-okd.mylab.home.net.    86400     IN    SRV     0    10    2380    etcd-1.okd
+_etcd-server-ssl._tcp.okd.my-okd.mylab.home.net.    86400     IN    SRV     0    10    2380    etcd-2.okd
+```
+
+Don't forget to assign these fixed IPs in the dhcp server as well (and create new MAC addresses here).
+
+Then we have to download all the files to create the iso image to set up the workers. For simplicity we
+use the same folder structure as we have when setting up the master nodes:
+
+```
+mkdir -p /root/install-dir/work-dir
+```
+
+Download fcct to `/root/install-dir/work-dir`
+
+```
+wget https://github.com/coreos/fcct/releases/download/v0.6.0/fcct-x86_64-unknown-linux-gnu
+mv fcct-x86_64-unknown-linux-gnu install-dir/work-dir/fcct 
+chmod 750 install-dir/work-dir/fcct
+```
+
+Download syslinux
+
+```
+curl -o install-dir/syslinux-6.03.tar.xz https://mirrors.edge.kernel.org/pub/linux/utils/boot/syslinux/syslinux-6.03.tar.xz
+tar -xf install-dir/syslinux-6.03.tar.xz -C install-dir/
+```
+
+Prepare the installation images
+
+```
+mkdir -p install-dir/fcos-iso/{isolinux,images}
+curl -o install-dir/fcos-iso/images/vmlinuz https://builds.coreos.fedoraproject.org/prod/streams/stable/builds/33.20210104.3.0/x86_64/fedora-coreos-33.20210104.3.0-live-kernel-x86_64
+curl -o install-dir/fcos-iso/images/initramfs.img https://builds.coreos.fedoraproject.org/prod/streams/stable/builds/33.20210104.3.0/x86_64/fedora-coreos-33.20210104.3.0-live-initramfs.x86_64.img
+curl -o install-dir/fcos-iso/images/rootfs.img https://builds.coreos.fedoraproject.org/prod/streams/stable/builds/33.20210104.3.0/x86_64/fedora-coreos-33.20210104.3.0-live-rootfs.x86_64.img
+```
+
+Copy the files together
+
+```
+cp install-dir/syslinux-6.03/bios/com32/elflink/ldlinux/ldlinux.c32 install-dir/fcos-iso/isolinux/ldlinux.c32
+cp install-dir/syslinux-6.03/bios/core/isolinux.bin install-dir/fcos-iso/isolinux/isolinux.bin
+cp install-dir/syslinux-6.03/bios/com32/menu/vesamenu.c32 install-dir/fcos-iso/isolinux/vesamenu.c32
+cp install-dir/syslinux-6.03/bios/com32/lib/libcom32.c32 install-dir/fcos-iso/isolinux/libcom32.c32
+cp install-dir/syslinux-6.03/bios/com32/libutil/libutil.c32 install-dir/fcos-iso/isolinux/libutil.c32
+```
+
+Create the iso image for the two workers. Mind that the `isolinux.cfg` file has to have the exact name
+and needs to be in this location. So we create the iso for the first image edit the file and create the
+second image.
+
+Here we see that the `worker.ign` file is used in the image. Keep in mind changing the IP, MAC address and
+hostname accordingly.
+
+The ignition file should still be served on the `okd4-services` machine. But since `haproxy` is running there
+and listening on port 80 we change the port `nginx` is listening on to 8080!
+
+`install-dir/fcos-iso/isolinux/isolinux.cfg`
+
+```
+serial 0
+default vesamenu.c32
+timeout 1
+menu clear
+menu separator
+label linux
+  menu label ^Fedora CoreOS (Live)
+  menu default
+  kernel /images/vmlinuz
+  append initrd=/images/initramfs.img,/images/rootfs.img net.ifnames=1 ifname=nic0:ab:cd:ef:11:22:14 ip=192.168.10.104::192.168.10.1:255.255.255.0:okd4-compute-1.my-okd.mylab.home.net:nic0:none nameserver=192.168.10.100 rd.neednet=1 coreos.inst=yes coreos.inst.install_dev=/dev/sda coreos.inst.ignition_url=http://192.168.10.100:8080/install/fcos/ignition/worker.ign coreos.inst.platform_id=qemu console=ttyS0
+menu separator
+menu end
+```
+
+```
+mkisofs -o /tmp/bootstrap.iso -b isolinux/isolinux.bin -c isolinux/boot.cat -no-emul-boot -boot-load-size 4 -boot-info-table -J -r install-dir/fcos-iso/
+```
+
+Do this again with the IP, MAC and hostname for the second worker (`okd4-compute-2`).
+
+After that we edit the `/etc/haproxy/haproxy.cfg` on the `okd4-services` machine. Actually we have to
+add entries to the `ingress_backend` traffic. That is because the workers only serve applications and no
+OKD internal stuff. Therefore, only those blocks are listed here. Mind the two new entries on each block
+containing the worker nodes `okd4-compute-1` and `okd4-compute-2`:
+
+```
+backend okd4_http_ingress_traffic_be
+balance source
+mode tcp
+server      okd4-control-plane-1 192.168.10.101:80 check
+server      okd4-control-plane-2 192.168.10.102:80 check
+server      okd4-control-plane-3 192.168.10.103:80 check
+server      okd4-compute-1 192.168.10.104:80 check
+server      okd4-compute-2 192.168.10.105:80 check
+
+backend okd4_https_ingress_traffic_be
+balance source
+mode tcp
+server      okd4-control-plane-1 192.168.10.101:443 check
+server      okd4-control-plane-2 192.168.10.102:443 check
+server      okd4-control-plane-3 192.168.10.103:443 check
+server      okd4-compute-1 192.168.10.104:443 check
+server      okd4-compute-2 192.168.10.105:443 check
+```
+
+When all this is done and the services are restarted (just as a reminder: named, dhcp, haproxy, nginx)
+we start up our two worker nodes:
+
+```
+virsh start okd4-compute-1
+virsh start okd4-compute-2
+```
+
+The machines will download the installation files and shut down. After they have shut down we start them
+again and the installation should start.
+
+During installation the new nodes will create certificate requests which we are going to sign. To do so
+we check the pending CSRs with the `oc` command line tool logged in as cluster admin.
+
+```
+oc get csr
+```
+
+There should be two pending certificates which we are going to sign
+
+```
+oc adm certificate approve <csr_name>
+```
+
+After doing so there will be two more CSRs to sign so we run `oc get csr` again and sign the two new
+certificates with `oc adm certificate approve <csr_name>`.
+
+Now we can log in to the openshift console on
+[https://console-openshift-console.apps.okd.my-okd.mylab.home.net/](https://console-openshift-console.apps.okd.fluff.chef.at/)
+and watch the status of the worker nodes on
+[https://console-openshift-console.apps.okd.my-okd.mylab.home.net/k8s/cluster/nodes](https://console-openshift-console.apps.okd.fluff.chef.at/k8s/cluster/nodes).
+
+The process could take a while but when the nodes are ready there is nothing more to do.
+
+Congratulations: you now have three control planes and two workers up and running!
