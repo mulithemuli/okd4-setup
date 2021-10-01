@@ -1455,6 +1455,9 @@ virsh start okd4-compute-2
 The machines will download the installation files and shut down. After they have shut down we start them
 again and the installation should start.
 
+The following infos are from
+[https://docs.okd.io/latest/post_installation_configuration/node-tasks.html#post-install-config-adding-fcos-compute](https://docs.okd.io/latest/post_installation_configuration/node-tasks.html#post-install-config-adding-fcos-compute).
+
 During installation the new nodes will create certificate requests which we are going to sign. To do so
 we check the pending CSRs with the `oc` command line tool logged in as cluster admin.
 
